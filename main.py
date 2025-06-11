@@ -29,13 +29,14 @@ async def whatsapp_webhook(request: Request):
 
     try:
         # Ответ от ChatGPT
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Ты вежливый ассистент, который отвечает клиентам через WhatsApp."},
-                {"role": "user", "content": message}
-            ]
-        )
+        response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": "Ты — вежливый и профессиональный помощник, представляющий образовательный центр. Отвечай на вопросы клиентов подробно, грамотно и дружелюбно. Предлагай помощь, рассказывай о курсах, расписании, оплате, преподавателях. Будь доброжелательным, отвечай так, как если бы ты был живым сотрудником центра."},
+        {"role": "user", "content": message}
+    ]
+)
+
 
         reply = response.choices[0].message.content.strip()
         print(f"Ответ: {reply}")
