@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
@@ -5,30 +6,46 @@ import os
 from openai import OpenAI
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import re
+from twilio.rest import Client as TwilioClient
 
-# Загрузка переменных окружения
+# Загрузка .env
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=api_key)
 
-# Настройка Google Sheets
+# Переменные окружения
+api_key = os.getenv("OPENAI_API_KEY")
+twilio_sid = os.getenv("TWILIO_ACCOUNT_SID")
+twilio_token = os.getenv("TWILIO_AUTH_TOKEN")
+twilio_whatsapp_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
+
+# Клиенты
+gpt = OpenAI(api_key=api_key)
+twilio = TwilioClient(twilio_sid, twilio_token)
+
+# Подключение к Google Таблице
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 gc = gspread.authorize(creds)
-
-# Таблица и лист
 sheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Ov__Oej19B_a1EKc18pg3qYylfxRwu0ITFrkDpXg53Y")
 faq_sheet = sheet.worksheet("FAQ")
 
+# Контекст сообщений
+context = {}
+
 app = FastAPI()
 
-def normalize(text):
-    return re.sub(r"[^\w\s]", "", text.lower()).strip()
+
+def send_whatsapp_message(to, body):
+    twilio.messages.create(
+        from_=f"whatsapp:{twilio_whatsapp_number}",
+        to=to,
+        body=body
+    )
+
 
 @app.get("/")
 def root():
     return {"status": "Bot is running ✅"}
+
 
 @app.post("/webhook")
 async def whatsapp_webhook(request: Request):
@@ -37,58 +54,43 @@ async def whatsapp_webhook(request: Request):
     sender = form_data.get("From", "")
 
     print(f"📩 Получено сообщение от {sender}: {message}")
+
     if not message:
         return PlainTextResponse("Нет текста", status_code=400)
 
     try:
-        message_clean = normalize(message)
         faq_data = faq_sheet.get_all_records()
-
-        matched_group = None
-
+        found = False
         for row in faq_data:
-            raw_questions = row.get("Вопрос", "")
-            group = row.get("Группа", "").strip()
-            if not raw_questions or not group:
-                continue
+            keywords = row.get("Вопрос", "").lower().split("|")
+            response = row.get("Ответ", "").strip()
+            if any(keyword in message.lower() for keyword in keywords) and response:
+                print(f"✅ Ответ по группе '{keywords[0]}': {response}")
+                send_whatsapp_message(sender, response)
+                found = True
 
-            synonyms = [normalize(q) for q in raw_questions.split(",")]
-            if any(s in message_clean for s in synonyms):
-                matched_group = group
-                break
+        if not found:
+            print("🤖 Ответа в таблице нет, обращаемся к ChatGPT...")
+            chat_history = context.get(sender, [])
+            chat_history.append({"role": "user", "content": message})
 
-        if matched_group:
-            answers = [
-                row.get("Ответ", "").strip()
-                for row in faq_data
-                if row.get("Группа", "").strip() == matched_group and row.get("Ответ", "").strip()
-            ]
-            if answers:
-                reply = "\n".join(answers)
-                print(f"✅ Ответ по группе '{matched_group}': {reply}")
-                return PlainTextResponse(reply)
-
-        # GPT если не найдено
-        print("🤖 Ответа в таблице нет, GPT в помощь...")
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
+            gpt_response = gpt.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content":
                         "Ты — вежливый и профессиональный помощник от имени образовательного центра. "
-                        "Твоя задача — грамотно, дружелюбно и понятно отвечать клиентам в WhatsApp. "
-                        "Рассказывай про курсы, расписание, цены, формат обучения, документы и сертификаты. "
-                        "Если что-то непонятно — переспрашивай. Будь вежливым, как живой человек, а не робот."
-                    )
-                },
-                {"role": "user", "content": message}
-            ]
-        )
-        reply = response.choices[0].message.content.strip()
-        print(f"🤖 Ответ от GPT: {reply}")
-        return PlainTextResponse(reply)
+                        "Отвечай понятно, дружелюбно и полезно по темам: курсы, цены, расписание, обучение, сертификаты."}
+                ] + chat_history
+            )
+            reply = gpt_response.choices[0].message.content.strip()
+            print(f"🤖 Ответ от ChatGPT: {reply}")
+            send_whatsapp_message(sender, reply)
+            chat_history.append({"role": "assistant", "content": reply})
+            context[sender] = chat_history[-10:]  # Сохраняем последние 10 сообщений
+
+        return PlainTextResponse("ok")
 
     except Exception as e:
         print("❌ Ошибка:", str(e))
+        send_whatsapp_message(sender, "Произошла ошибка на сервере. Мы скоро всё исправим 🙏")
         return PlainTextResponse("Ошибка сервера", status_code=500)
