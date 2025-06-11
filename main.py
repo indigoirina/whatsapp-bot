@@ -2,19 +2,17 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 import os
-import openai
+from openai import OpenAI
 
-# Загружаем ключ из .env
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+api_key = os.getenv("OPENAI_API_KEY")
 
+client = OpenAI(api_key=api_key)
 app = FastAPI()
-
 
 @app.get("/")
 def root():
     return {"status": "Bot is running ✅"}
-
 
 @app.post("/webhook")
 async def whatsapp_webhook(request: Request):
@@ -28,19 +26,26 @@ async def whatsapp_webhook(request: Request):
         return PlainTextResponse("Нет текста", status_code=400)
 
     try:
-        # Ответ от ChatGPT
         response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages=[
-        {"role": "system", "content": "Ты — вежливый и профессиональный помощник, представляющий образовательный центр. Отвечай на вопросы клиентов подробно, грамотно и дружелюбно. Предлагай помощь, рассказывай о курсах, расписании, оплате, преподавателях. Будь доброжелательным, отвечай так, как если бы ты был живым сотрудником центра."},
-        {"role": "user", "content": message}
-    ]
-)
-
-
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты — вежливый и профессиональный помощник от имени образовательного центра. "
+                        "Твоя задача — грамотно, дружелюбно и понятно отвечать клиентам в WhatsApp. "
+                        "Рассказывай про курсы, расписание, цены, формат обучения, документы и сертификаты. "
+                        "Если что-то непонятно — переспрашивай. Будь вежливым, как живой человек, а не робот."
+                    )
+                },
+                {"role": "user", "content": message}
+            ]
+        )
         reply = response.choices[0].message.content.strip()
         print(f"Ответ: {reply}")
         return PlainTextResponse(reply)
+
     except Exception as e:
         print("Ошибка:", str(e))
         return PlainTextResponse("Ошибка сервера", status_code=500)
+
