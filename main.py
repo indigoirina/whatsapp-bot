@@ -12,16 +12,17 @@ load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
-# Google Sheets
+# Настройка Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 gc = gspread.authorize(creds)
+
+# Таблица и лист
 sheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Ov__Oej19B_a1EKc18pg3qYylfxRwu0ITFrkDpXg53Y")
 faq_sheet = sheet.worksheet("FAQ")
 
 app = FastAPI()
 
-# Очистка текста от знаков и регистра
 def normalize(text):
     return re.sub(r"[^\w\s]", "", text.lower()).strip()
 
@@ -43,27 +44,32 @@ async def whatsapp_webhook(request: Request):
         message_clean = normalize(message)
         faq_data = faq_sheet.get_all_records()
 
-        # Проход по строкам таблицы
+        matched_group = None
+
         for row in faq_data:
-            question = row.get("Вопрос", "").strip()
-            synonyms = question.lower().split(",") if question else []
+            raw_questions = row.get("Вопрос", "")
             group = row.get("Группа", "").strip()
+            if not raw_questions or not group:
+                continue
 
-            for synonym in synonyms:
-                if normalize(synonym) in message_clean and group:
-                    # Все ответы из этой группы
-                    group_answers = [
-                        r["Ответ"].strip()
-                        for r in faq_data
-                        if r.get("Группа", "").strip() == group and r.get("Ответ", "").strip()
-                    ]
-                    if group_answers:
-                        full_reply = "\n".join(group_answers)
-                        print(f"✅ Ответы по группе '{group}': {full_reply}")
-                        return PlainTextResponse(full_reply)
+            synonyms = [normalize(q) for q in raw_questions.split(",")]
+            if any(s in message_clean for s in synonyms):
+                matched_group = group
+                break
 
-        # Если ничего не найдено — GPT
-        print("🤖 Ответа в таблице нет, обращаемся к ChatGPT...")
+        if matched_group:
+            answers = [
+                row.get("Ответ", "").strip()
+                for row in faq_data
+                if row.get("Группа", "").strip() == matched_group and row.get("Ответ", "").strip()
+            ]
+            if answers:
+                reply = "\n".join(answers)
+                print(f"✅ Ответ по группе '{matched_group}': {reply}")
+                return PlainTextResponse(reply)
+
+        # GPT если не найдено
+        print("🤖 Ответа в таблице нет, GPT в помощь...")
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -80,10 +86,9 @@ async def whatsapp_webhook(request: Request):
             ]
         )
         reply = response.choices[0].message.content.strip()
-        print(f"🤖 Ответ от ChatGPT: {reply}")
+        print(f"🤖 Ответ от GPT: {reply}")
         return PlainTextResponse(reply)
 
     except Exception as e:
         print("❌ Ошибка:", str(e))
         return PlainTextResponse("Ошибка сервера", status_code=500)
-
