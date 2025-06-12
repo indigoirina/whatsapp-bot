@@ -18,9 +18,8 @@ gc = gspread.authorize(creds)
 
 # Открываем таблицу по ссылке и лист с FAQ
 sheet = gc.open_by_url("https://docs.google.com/spreadsheets/d/1Ov__Oej19B_a1EKc18pg3qYylfxRwu0ITFrkDpXg53Y")
-faq_sheet = sheet.worksheet("FAQ")  # Имя листа должно быть FAQ
+faq_sheet = sheet.worksheet("FAQ")
 
-# Инициализация FastAPI
 app = FastAPI()
 
 @app.get("/")
@@ -33,21 +32,23 @@ async def whatsapp_webhook(request: Request):
     message = form_data.get("Body", "").strip()
     sender = form_data.get("From", "")
 
-    print(f"Получено сообщение от {sender}: {message}")
+    print(f"📩 Получено сообщение от {sender}: {message}")
 
     if not message:
         return PlainTextResponse("Нет текста", status_code=400)
 
     try:
-        # Попытка найти ответ в таблице
+        # Поиск в таблице
         faq_data = faq_sheet.get_all_records()
         for row in faq_data:
-            if row.get("Вопрос", "").strip().lower() == message.lower():
-                reply = row.get("Ответ", "Извините, ответа пока нет.")
-                print(f"Ответ из таблицы: {reply}")
-                return PlainTextResponse(reply)
+            question = row.get("Вопрос", "").strip().lower()
+            answer = row.get("Ответ", "").strip()
+            if question and question in message.lower():
+                print(f"✅ Ответ из таблицы найден: {answer}")
+                return PlainTextResponse(answer or "Ответ пока не задан.")
 
-        # Если не найдено — спрашиваем ChatGPT
+        # Если не найдено — ChatGPT
+        print("🤖 Ответа в таблице нет, обращаемся к ChatGPT...")
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -64,9 +65,9 @@ async def whatsapp_webhook(request: Request):
             ]
         )
         reply = response.choices[0].message.content.strip()
-        print(f"Ответ от ChatGPT: {reply}")
+        print(f"🤖 Ответ от ChatGPT: {reply}")
         return PlainTextResponse(reply)
 
     except Exception as e:
-        print("Ошибка:", str(e))
+        print("❌ Ошибка:", str(e))
         return PlainTextResponse("Ошибка сервера", status_code=500)
