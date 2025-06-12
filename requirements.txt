@@ -3,3 +3,5 @@ uvicorn
 openai>=1.0.0
 python-dotenv
 python-multipart
+gspread
+oauth2client
