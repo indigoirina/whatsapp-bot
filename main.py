@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
@@ -5,6 +6,7 @@ import os
 from openai import OpenAI
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import re
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -22,6 +24,16 @@ faq_sheet = sheet.worksheet("FAQ")
 
 app = FastAPI()
 
+# Синонимы вопросов
+FAQ_SYNONYMS = {
+    "стоимость курса": ["стоимость курса", "цена курса", "цена", "оплата", "оплата обучения", "сколько стоит", "стоимость занятий"],
+    "расписание": ["расписание", "время занятий", "когда занятия", "график", "дни занятий", "во сколько уроки"],
+    "сертификат": ["сертификат", "документ", "бумага", "диплом", "удостоверение"]
+}
+
+def normalize(text):
+    return re.sub(r"[^\w\s]", "", text.lower()).strip()
+
 @app.get("/")
 def root():
     return {"status": "Bot is running ✅"}
@@ -38,12 +50,24 @@ async def whatsapp_webhook(request: Request):
         return PlainTextResponse("Нет текста", status_code=400)
 
     try:
-        # Поиск в таблице
+        message_clean = normalize(message)
         faq_data = faq_sheet.get_all_records()
+
+        # Поиск по синонимам
+        for keyword, phrases in FAQ_SYNONYMS.items():
+            for phrase in phrases:
+                if normalize(phrase) in message_clean:
+                    for row in faq_data:
+                        if normalize(row.get("Вопрос", "")) == normalize(keyword):
+                            answer = row.get("Ответ", "Ответ пока не задан.")
+                            print(f"✅ Найден по синониму '{phrase}': {answer}")
+                            return PlainTextResponse(answer)
+
+        # Поиск по точному вхождению
         for row in faq_data:
             question = row.get("Вопрос", "").strip().lower()
             answer = row.get("Ответ", "").strip()
-            if question and question in message.lower():
+            if question and question in message_clean:
                 print(f"✅ Ответ из таблицы найден: {answer}")
                 return PlainTextResponse(answer or "Ответ пока не задан.")
 
